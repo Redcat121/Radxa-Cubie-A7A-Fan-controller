@@ -24,28 +24,23 @@ on:
 
 jobs:
   build-aarch64:
-    # Native ARM runner: the aarch64 cross toolchain and linker ship with the
-    # runner image, so the binary links against an elf64-aarch64 linker instead
-    # of the host's x86_64 one (which produced "incompatible with elf64-x86-64").
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Cross.action installs the aarch64 cross toolchain and links against the
+      # matching aarch64 linker, so the binary links as elf64-aarch64 instead of
+      # falling back to the host's x86_64 linker.
+      - uses: deluan/cross-action@v24
         with:
-          # Pinned to 1.97.1: Rust 1.98+ hard-codes --fix-cortex-a53-843419
-          # into the aarch64 link command, which breaks on the old GNU ld
-          # shipped by GitHub's ubuntu-latest runners.
           toolchain: "1.97.1"
-          target: aarch64-unknown-linux-gnu
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build release binary
-        run: cargo build --release --target aarch64-unknown-linux-gnu
+      - name: Cross-compile release binary
+        run: cross build --release --target aarch64-unknown-linux-gnu
 
       - name: Upload binary to release
         uses: softprops/action-gh-release@v3
         with:
           files: target/aarch64-unknown-linux-gnu/Radxa-Cubie-A7A-thermal-controller
-          tag: ${{ github.ref_name }}
