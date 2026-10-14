@@ -30,7 +30,10 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
+          # Pinned to 1.97.1: Rust 1.98+ hard-codes --fix-cortex-a53-843419
+          # into the aarch64 link command, which breaks on the old GNU ld
+          # shipped by GitHub's ubuntu-latest runners.
+          toolchain: "1.97.1"
           target: aarch64-unknown-linux-gnu
 
       - uses: Swatinem/rust-cache@v2
