@@ -1,0 +1,45 @@
+name: Build ARM release
+
+# Builds a prebuilt thermal-controller binary for the Radxa Cubie A7A (AArch64)
+# and attaches it to the GitHub Release so the install can be a one-liner.
+#
+# Flow:
+#   1. You create a GitHub Release (with a tag) on this repo. The tag is what
+#      triggers this workflow.
+#   2. This action runs: cross-compiles the binary on a GitHub-hosted runner
+#      (no ARM hardware needed there), and uploads it as a release asset.
+#   3. Anyone can then install with a single curl command.
+#
+# Installers use the `latest` release tag instead of a hardcoded version, so
+# they always fetch the newest release without needing to know the tag name.
+# See install.sh for the install command.
+#
+# The Radxa Cubie A7A is an Allwinner A733 => AArch64 => target
+# aarch64-unknown-linux-gnu. Verify the board's arch with `uname -m` (should
+# print `aarch64`). If it prints something else, change the target below.
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  build-aarch64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          target: aarch64-unknown-linux-gnu
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --target aarch64-unknown-linux-gnu
+
+      - name: Upload binary to release
+        uses: softprops/action-upload-release@v2
+        with:
+          file_path: target/aarch64-unknown-linux-gnu/Radxa-Cubie-A7A-thermal-controller
+          tag: ${{ github.ref_name }}

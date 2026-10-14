@@ -1,0 +1,24 @@
+[package]
+name = "Radxa-Cubie-A7A-thermal-controller"
+version = "1.0.0"
+edition = "2021"
+description = "Decoupled thermal controller for Radxa Cubie A7A - monitors thermal zones and drives PWM fans"
+license = "MIT"
+readme = "README.md"
+
+[[bin]]
+name = "Radxa-Cubie-A7A-thermal-controller"
+path = "src/main.rs"
+
+# Profile for low-latency embedded use
+[profile.release]
+opt-level = "z"   # size-optimized, good for embedded
+lto = true
+codegen-units = 1
+panic = "abort"   # no runtime on embedded; we handle shutdown manually
+strip = true
+
+[dependencies]
+signal-hook = "0.3"
+
+[dev-dependencies]
