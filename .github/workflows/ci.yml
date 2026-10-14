@@ -31,7 +31,7 @@ jobs:
       # Cross.action installs the aarch64 cross toolchain and links against the
       # matching aarch64 linker, so the binary links as elf64-aarch64 instead of
       # falling back to the host's x86_64 linker.
-      - uses: deluan/cross-action@v24
+      - uses: deluan/rust-cross-action@v24
         with:
           toolchain: "1.97.1"
 
