@@ -39,7 +39,7 @@ jobs:
         run: cargo build --release --target aarch64-unknown-linux-gnu
 
       - name: Upload binary to release
-        uses: softprops/action-upload-release@v2
+        uses: softprops/action-gh-release@v3
         with:
-          file_path: target/aarch64-unknown-linux-gnu/Radxa-Cubie-A7A-thermal-controller
+          files: target/aarch64-unknown-linux-gnu/Radxa-Cubie-A7A-thermal-controller
           tag: ${{ github.ref_name }}
