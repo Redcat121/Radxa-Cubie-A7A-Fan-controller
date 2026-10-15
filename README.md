@@ -42,7 +42,7 @@ Rust toolchain or source checkout:
 
 ```sh
 # 1. Install the controller (downloads the latest prebuilt binary)
-curl -sSL https://github.com/Redcat121/Radxa-Cubie-A7A-thermal-controller/releases/download/latest/Radxa-Cubie-A7A-thermal-controller | sudo tee /usr/local/bin/thermal-controller
+curl -sSL https://github.com/Redcat121/Radxa-Cubie-A7A-Fan-controller/releases/download/latest/Radxa-Cubie-A7A-thermal-controller | sudo tee /usr/local/bin/thermal-controller
 
 # 2. Start it
 sudo systemctl start thermal-controller
