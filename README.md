@@ -42,13 +42,58 @@ Rust toolchain or source checkout:
 
 ```sh
 # 1. Install the controller (downloads the latest prebuilt binary)
-curl -sSL https://github.com/Redcat121/Radxa-Cubie-A7A-Fan-controller/releases/download/latest/Radxa-Cubie-A7A-thermal-controller | sudo tee /usr/local/bin/thermal-controller
+sudo curl -sSL https://github.com/Redcat121/Radxa-Cubie-A7A-Fan-controller/releases/latest/download/Radxa-Cubie-A7A-thermal-controller -o /usr/local/bin/thermal-controller
+```
+```sh
+# 2. Marked it as executable
+sudo chmod +x /usr/local/bin/thermal-controller
+```
+```sh
+# 3. Create the service configuration file 
+sudo nano /etc/systemd/system/thermal-controller.service
+```
+```sh
+[Unit]
+Description=Radxa Cubie A7A Fan Control Service
+After=multi-user.target
 
-# 2. Start it
+[Service]
+User=root
+
+
+ExecStartPre=/usr/bin/sleep 5
+ExecStart=/usr/local/bin/thermal-controller
+Restart=always
+RestartSec=5
+KillMode=process
+SendSIGKILL=no
+
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```sh
+# 4. Reload systemd so it recognizes the new file
+sudo systemctl daemon-reload
+```
+
+```sh
+# 5. Start it
 sudo systemctl start thermal-controller
 ```
 
-## Install from source
+```sh
+# 6. Enable it on boot 
+sudo systemctl enable thermal-controller
+```
+
+```sh
+# check to see if it is running
+sudo systemctl status thermal-controller
+```
+
+## Install from source (not tested)
 
 If no prebuilt release exists yet, the installer can build the binary for you
 and set everything up:
@@ -95,18 +140,6 @@ ls /sys/class/thermal/
 sudo ./target/release/thermal-controller
 ```
 
-You'll see something like this:
-
-```
-🚀 Initializing Decoupled Thermal Controller (EMA Smoothing Edition)...
-✅ System scan complete.
-📊 Thermal zones found: 2
-💨 Fan devices found:   1
-Status: [🔥 Hotspot: cpu @ 58.3°C (EMA: 58.1°C)] | Fan (fan) 8 / 12
-```
-
-The `Status` line shows your hottest spot and the current fan speed (steps out
-of the fan's total range).
 
 ## Configuration
 
