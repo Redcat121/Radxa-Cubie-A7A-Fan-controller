@@ -19,6 +19,6 @@ panic = "abort"   # no runtime on embedded; we handle shutdown manually
 strip = true
 
 [dependencies]
-signal-hook = "0.3"
+signal-hook = "0.4"
 
 [dev-dependencies]
