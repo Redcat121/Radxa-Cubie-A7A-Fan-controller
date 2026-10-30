@@ -11,8 +11,8 @@ test on other hardware, please tell us so we can confirm compatibility.
 1. Fork the repo and clone your fork:
 
    ```sh
-   git clone https://github.com/Redcat121/Radxa-Cubie-A7A-thermal-controller.git
-   cd Radxa-Cubie-A7A-thermal-controller
+   git clone https://github.com/Redcat121/Radxa-Cubie-A7A-Fan-controller.git
+   cd Radxa-Cubie-A7A-Fan-controller
    ```
 
 2. Install Rust:
