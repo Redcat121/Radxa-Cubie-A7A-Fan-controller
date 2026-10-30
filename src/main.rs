@@ -16,6 +16,8 @@
 //!     oscillation (DCM2588 PWM fans have only ~12 discrete steps).
 //!   * **Emergency panic hook** – if the binary panics, all fans are maxed so
 //!     the hardware never overheats while the SoC is dead.
+//!   * **Fail-safe on blind sensors** – if no thermal zone can be read, the
+//!     fans run at maximum until readings return.
 //!
 //! Build:
 //!   ```sh
@@ -167,6 +169,22 @@ fn discover_system() -> Result<(Vec<ThermalZone>, Vec<CoolingDevice>, Vec<String
 // Control logic
 // ---------------------------------------------------------------------------
 
+/// Read every zone and return the hottest valid reading as `(°C, zone name)`.
+///
+/// Unreadable, unparsable and non-finite readings are skipped. Returns `None`
+/// when no zone produced a usable reading.
+fn read_hottest(zones: &[ThermalZone]) -> Option<(f64, String)> {
+    zones
+        .iter()
+        .filter_map(|zone| {
+            let raw = fs::read_to_string(&zone.path).ok()?;
+            let milli_c = raw.trim().parse::<f64>().ok()?; // sysfs reports milli-degrees
+            let temp = milli_c / 1000.0;
+            temp.is_finite().then(|| (temp, zone.name.clone()))
+        })
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+}
+
 /// Compute the fan target step (0..=max_state) for a temperature.
 ///
 /// * `>= TEMP_MAX` → full speed
@@ -249,22 +267,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut smoothed_temp: Option<f64> = None;
     let mut last_applied_temp: f64 = TEMP_MIN;
     let mut last_status = 0u64;
+    let mut sensors_lost = false;
 
     while !shutdown_signal.load(Ordering::Relaxed) {
-        // 1. Find the hottest hot-spot on the board.
-        let mut global_max_temp = 0.0f64;
-        let mut hottest_zone_name = String::from("Unknown");
-
-        for zone in &zones {
-            if let Ok(temp_text) = fs::read_to_string(&zone.path) {
-                if let Ok(temp_raw) = temp_text.trim().parse::<f64>() {
-                    let temp = temp_raw / 1000.0; // sysfs reports milli-degrees
-                    if temp > global_max_temp {
-                        global_max_temp = temp;
-                        hottest_zone_name = zone.name.clone();
-                    }
+        // 1. Find the hottest hot-spot on the board. If no sensor is readable
+        //    the temperature is unknown, so fail safe: run the fans at maximum
+        //    and leave the smoothing state untouched.
+        let Some((global_max_temp, hottest_zone_name)) = read_hottest(&zones) else {
+            if !sensors_lost {
+                eprintln!("⚠️  No thermal zone is readable; forcing fans to maximum until readings return.");
+                sensors_lost = true;
+            }
+            for fan in &fans {
+                if let Err(e) = set_fan(fan, fan.max_state) {
+                    println!("❌ Failed to set {} to {}: {e}", fan.name, fan.max_state);
                 }
             }
+            thread::sleep(POLL_INTERVAL);
+            continue;
+        };
+        if sensors_lost {
+            println!("✅ Thermal readings restored; resuming normal control.");
+            sensors_lost = false;
         }
 
         // 2. EMA smoothing.
@@ -362,6 +386,45 @@ mod tests {
     #[test]
     fn target_zero_for_nonpositive_max_state() {
         assert_eq!(compute_target(50.0, 0), 0);
+    }
+
+    // --- read_hottest -----------------------------------------------------
+
+    /// Build a zone whose `temp` file holds `contents` (`None` = file missing).
+    fn temp_zone(tag: &str, contents: Option<&str>) -> ThermalZone {
+        let path = std::env::temp_dir().join(format!("tc-test-{}-{tag}", std::process::id()));
+        match contents {
+            Some(c) => fs::write(&path, c).unwrap(),
+            None => {
+                let _ = fs::remove_file(&path);
+            }
+        }
+        ThermalZone {
+            name: tag.to_string(),
+            path: path.to_string_lossy().into_owned(),
+        }
+    }
+
+    #[test]
+    fn read_hottest_is_none_when_no_zone_is_readable() {
+        let zones = [
+            temp_zone("missing", None),
+            temp_zone("garbage", Some("not a number")),
+            temp_zone("nan", Some("nan")),
+        ];
+        assert!(read_hottest(&zones).is_none());
+    }
+
+    #[test]
+    fn read_hottest_picks_the_hottest_readable_zone() {
+        let zones = [
+            temp_zone("cool", Some("41000\n")),
+            temp_zone("hot", Some("58500\n")),
+            temp_zone("broken", None),
+        ];
+        let (temp, name) = read_hottest(&zones).unwrap();
+        assert_eq!(name, "hot");
+        assert!((temp - 58.5).abs() < 1e-9);
     }
 
     // --- EMA smoothing ----------------------------------------------------
