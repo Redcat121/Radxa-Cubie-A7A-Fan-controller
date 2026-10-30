@@ -228,10 +228,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if zones.is_empty() || fans.is_empty() {
-        println!("❌ Error: missing critical components (need ≥1 zone and ≥1 fan).");
-        println!("   Check your board exposes /sys/class/thermal and a PWM fan;");
-        println!("   you may need `modprobe pwm_fan` or a PWM fan driver loaded.");
-        return Ok(());
+        eprintln!("❌ Error: missing critical components (need ≥1 zone and ≥1 fan).");
+        eprintln!("   Check your board exposes /sys/class/thermal and a PWM fan;");
+        eprintln!("   you may need `modprobe pwm_fan` or a PWM fan driver loaded.");
+        // Non-zero exit so systemd treats this as a failure and restarts the
+        // service (the fan driver may simply not be loaded yet).
+        std::process::exit(1);
     }
 
     // --- Emergency panic hook --------------------------------------------

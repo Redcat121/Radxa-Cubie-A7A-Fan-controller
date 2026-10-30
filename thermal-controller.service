@@ -1,0 +1,15 @@
+[Unit]
+Description=Radxa Cubie A7A Fan Control Service
+After=multi-user.target
+
+[Service]
+User=root
+ExecStartPre=/usr/bin/sleep 5
+ExecStart=/usr/local/bin/thermal-controller
+Restart=always
+RestartSec=5
+KillMode=process
+SendSIGKILL=no
+
+[Install]
+WantedBy=multi-user.target
