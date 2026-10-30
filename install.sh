@@ -4,21 +4,22 @@
 #
 # Two modes:
 #
-#   1. Prebuilt binary (recommended, one-liner after setup):
-#        curl -sSL https://github.com/Redcat121/Radxa-Cubie-A7A-thermal-controller/releases/download/latest/Radxa-Cubie-A7A-thermal-controller | sudo tee /usr/local/bin/thermal-controller
+#   1. Build from source (default):
+#        sudo bash ./install.sh
 #
-#   2. Build from source (no prebuilt release available):
-#        bash ./install.sh --from-source
+#   2. Download the prebuilt binary from the latest GitHub Release:
+#        sudo bash ./install.sh --prebuilt
 #
-# Steps (source mode):
-#   1. Install the Rust toolchain (rustup) if it is missing.
-#   2. Build the release binary.
+# Steps:
+#   1. Source mode: install the Rust toolchain (rustup) if it is missing and
+#      build the release binary. Prebuilt mode: download the release asset.
+#   2. Install the binary to /usr/local/bin/thermal-controller.
 #   3. Load the pwm_fan kernel module (enables /sys/class/thermal cooling_device*).
 #   4. Install the systemd service unit (thermal-controller.service, auto-restart).
 #
 # Usage:
-#   sudo bash ./install.sh                       # from-source install
-#   sudo bash ./install.sh --from-source         # from-source (explicit)
+#   sudo bash ./install.sh                       # build from source (default)
+#   sudo bash ./install.sh --prebuilt            # download the prebuilt binary
 #   bash ./install.sh --dry-run                  # preview only, no changes
 #   bash ./install.sh --help                     # usage
 #
@@ -28,14 +29,16 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="/usr/local/bin"
-SERVICE_NAME="thermal-controller"
-FROM_SOURCE=0
+SERVICE_NAME="thermal-controller"               # installed binary and systemd unit name
+BIN_NAME="Radxa-Cubie-A7A-thermal-controller"   # cargo binary and release asset name
+RELEASE_URL="https://github.com/Redcat121/Radxa-Cubie-A7A-Fan-controller/releases/latest/download/$BIN_NAME"
+PREBUILT=0
 DRY_RUN=0
-RELEASE_URL=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --from-source) FROM_SOURCE=1; shift ;;
+        --prebuilt)    PREBUILT=1; shift ;;
+        --from-source) PREBUILT=0; shift ;;   # kept for compatibility; this is the default
         --dry-run)     DRY_RUN=1; shift ;;
         -h|--help)
             grep -E '^#( |$)|^Usage' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -55,7 +58,7 @@ section() {
 # In dry-run mode, print but never execute.
 run() {
     if [[ $DRY_RUN -eq 1 ]]; then
-        printf '  \033[33m[dry-run] would run: %s\n' "$*"
+        printf '  \033[33m[dry-run] would run: %s\033[0m\n' "$*"
     else
         "$@"
     fi
@@ -82,46 +85,46 @@ fi
 echo
 
 # ---------------------------------------------------------------------------
-# From-source build
+# Get the binary: download it or build it. Either way STAGED_BIN ends up
+# pointing at the file to install.
 # ---------------------------------------------------------------------------
-if [[ $FROM_SOURCE -eq 1 ]]; then
-    section "Build from source"
-    if ! command -v cargo >/dev/null 2>&1; then
-        info "cargo not found; installing Rust via rustup..."
-        run curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain "stable"
-        run bash -lc 'echo "source \$HOME/.cargo/env" >> ~/.bashrc'
-    fi
-    BIN="target/release/$SERVICE_NAME"
-    run cargo build --release
-    if [[ ! -x "$BIN" ]]; then
-        err "Build did not produce $BIN."
-        exit 1
-    fi
-    log "Built $BIN"
-else
+if [[ $PREBUILT -eq 1 ]]; then
     section "Fetch prebuilt binary from GitHub Release"
-    if [[ -z "$RELEASE_URL" ]]; then
-        err "No RELEASE_URL set; build from source instead:  bash ./install.sh --from-source"
-        exit 1
-    fi
+    STAGED_BIN="${TMPDIR:-/tmp}/$BIN_NAME.download"
     info "Downloading from: $RELEASE_URL"
-    run curl -sSL "$RELEASE_URL" -o "$SERVICE_NAME.tmp"
-    if [[ ! -s "$SERVICE_NAME.tmp" ]]; then
+    run curl -fsSL "$RELEASE_URL" -o "$STAGED_BIN"
+    if [[ $DRY_RUN -eq 0 && ! -s "$STAGED_BIN" ]]; then
         err "Download was empty."
         exit 1
     fi
+else
+    section "Build from source"
+    if ! command -v cargo >/dev/null 2>&1; then
+        info "cargo not found; installing Rust via rustup..."
+        run bash -c 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable'
+        if [[ -f "$HOME/.cargo/env" ]]; then
+            # shellcheck disable=SC1091
+            source "$HOME/.cargo/env"
+        fi
+    fi
+    STAGED_BIN="$SCRIPT_DIR/target/release/$BIN_NAME"
+    run cargo build --release --manifest-path "$SCRIPT_DIR/Cargo.toml"
+    if [[ $DRY_RUN -eq 0 && ! -x "$STAGED_BIN" ]]; then
+        err "Build did not produce $STAGED_BIN."
+        exit 1
+    fi
+    log "Built $STAGED_BIN"
 fi
 
 # ---------------------------------------------------------------------------
 # Install binary
 # ---------------------------------------------------------------------------
 section "Install binary"
-if [[ ! -d "$INSTALL_DIR" ]]; then
-    run mkdir -p "$INSTALL_DIR"
-fi
-run chmod +x "$SERVICE_NAME.tmp"
-run cp "$SERVICE_NAME.tmp" "$INSTALL_DIR/$SERVICE_NAME"
+run install -D -m 755 "$STAGED_BIN" "$INSTALL_DIR/$SERVICE_NAME"
 log "Installed $INSTALL_DIR/$SERVICE_NAME"
+if [[ $PREBUILT -eq 1 ]]; then
+    run rm -f "$STAGED_BIN"
+fi
 
 # ---------------------------------------------------------------------------
 # PWM fan driver
