@@ -205,10 +205,12 @@ fn compute_target(temp_c: f64, max_state: i32) -> i32 {
     raw.ceil() as i32
 }
 
-/// Apply a fan target to a device; returns `Ok(())` on success.
+/// Apply a fan target to a device. Returns an error describing the failure if
+/// the sysfs write is rejected, so callers never report a fan as set when it
+/// was not.
 fn set_fan(fan: &CoolingDevice, target: i32) -> Result<(), String> {
-    let _ = fs::write(&fan.path, target.to_string());
-    Ok(())
+    fs::write(&fan.path, target.to_string())
+        .map_err(|e| format!("cannot write {}: {e}", fan.path))
 }
 
 /// Milliseconds since the Unix epoch, or 0 if the clock is unavailable.
@@ -334,14 +336,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- Graceful shutdown: max fans -------------------------------------
     println!("\n🛑 Shutdown detected. Forcing all fans to maximum before exit...");
+    let mut failed_fans = 0;
     for fan in &fans {
         match set_fan(fan, fan.max_state) {
             Ok(()) => println!("✅ {} → {} (max)", fan.name, fan.max_state),
-            Err(e) => println!("❌ {} final state failed: {e}", fan.name),
+            Err(e) => {
+                failed_fans += 1;
+                println!("❌ {} final state failed: {e}", fan.name);
+            }
         }
     }
 
-    println!("👋 Thermal controller terminated safely.");
+    if failed_fans == 0 {
+        println!("👋 Thermal controller terminated safely.");
+    } else {
+        eprintln!(
+            "⚠️  Thermal controller terminated, but {failed_fans} fan(s) could not be set to maximum."
+        );
+    }
     Ok(())
 }
 
@@ -386,6 +398,31 @@ mod tests {
     #[test]
     fn target_zero_for_nonpositive_max_state() {
         assert_eq!(compute_target(50.0, 0), 0);
+    }
+
+    // --- set_fan ----------------------------------------------------------
+
+    #[test]
+    fn set_fan_writes_the_target() {
+        let path = std::env::temp_dir().join(format!("tc-test-{}-fan", std::process::id()));
+        let fan = CoolingDevice {
+            name: "fan".into(),
+            path: path.to_string_lossy().into_owned(),
+            max_state: 12,
+        };
+        set_fan(&fan, 7).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "7");
+    }
+
+    #[test]
+    fn set_fan_reports_write_failures() {
+        let fan = CoolingDevice {
+            name: "fan".into(),
+            path: "/nonexistent-dir/cur_state".into(),
+            max_state: 12,
+        };
+        let err = set_fan(&fan, 3).unwrap_err();
+        assert!(err.contains("/nonexistent-dir/cur_state"), "got {err}");
     }
 
     // --- read_hottest -----------------------------------------------------
