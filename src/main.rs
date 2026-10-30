@@ -185,6 +185,41 @@ fn read_hottest(zones: &[ThermalZone]) -> Option<(f64, String)> {
         .max_by(|a, b| a.0.total_cmp(&b.0))
 }
 
+/// EMA smoothing followed by a hysteresis gate.
+///
+/// Turns noisy raw readings into the temperature the fans should be driven by:
+/// the effective value only moves once the smoothed reading differs from the
+/// last applied value by at least `HYSTERESIS_BUFFER`.
+struct TempFilter {
+    ema: Option<f64>,
+    applied: f64,
+}
+
+impl TempFilter {
+    fn new() -> Self {
+        Self {
+            ema: None,
+            applied: TEMP_MIN,
+        }
+    }
+
+    /// Feed one raw reading (°C) and return the effective temperature.
+    fn update(&mut self, raw: f64) -> f64 {
+        let smoothed = match self.ema {
+            Some(prev) => EMA_ALPHA * raw + (1.0 - EMA_ALPHA) * prev,
+            None => raw,
+        };
+        self.ema = Some(smoothed);
+
+        if (smoothed - self.applied).abs() < HYSTERESIS_BUFFER {
+            self.applied
+        } else {
+            self.applied = smoothed;
+            smoothed
+        }
+    }
+}
+
 /// Compute the fan target step (0..=max_state) for a temperature.
 ///
 /// * `>= TEMP_MAX` → full speed
@@ -266,8 +301,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }));
 
     // --- Main monitoring loop --------------------------------------------
-    let mut smoothed_temp: Option<f64> = None;
-    let mut last_applied_temp: f64 = TEMP_MIN;
+    let mut filter = TempFilter::new();
     let mut last_status = 0u64;
     let mut sensors_lost = false;
 
@@ -293,23 +327,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             sensors_lost = false;
         }
 
-        // 2. EMA smoothing.
-        smoothed_temp = match smoothed_temp {
-            Some(prev) => Some(EMA_ALPHA * global_max_temp + (1.0 - EMA_ALPHA) * prev),
-            None => Some(global_max_temp),
-        };
-        let smoothed_val = smoothed_temp.unwrap_or(global_max_temp);
+        // 2. Smooth the reading and apply hysteresis.
+        let effective_temp = filter.update(global_max_temp);
 
-        // 3. Hysteresis: keep the last applied value unless the smoothed temp
-        //    moved by more than the buffer.
-        let mut effective_temp = smoothed_val;
-        if (smoothed_val - last_applied_temp).abs() < HYSTERESIS_BUFFER {
-            effective_temp = last_applied_temp;
-        } else {
-            last_applied_temp = smoothed_val;
-        }
-
-        // 4. Drive every fan.
+        // 3. Drive every fan.
         for fan in &fans {
             let target = compute_target(effective_temp, fan.max_state);
             match set_fan(fan, target) {
@@ -464,46 +485,34 @@ mod tests {
         assert!((temp - 58.5).abs() < 1e-9);
     }
 
-    // --- EMA smoothing ----------------------------------------------------
+    // --- TempFilter (EMA smoothing + hysteresis) --------------------------
 
     #[test]
-    fn ema_converges_toward_target() {
-        // Start at 35, read 65 repeatedly; EMA should climb toward 65.
-        let mut ema: Option<f64> = None;
-        let alpha = EMA_ALPHA;
-        let mut last = TEMP_MIN;
+    fn filter_converges_toward_a_sustained_reading() {
+        let mut filter = TempFilter::new();
+        filter.update(35.0); // seed at the floor
+        let mut effective = 0.0;
         for _ in 0..50 {
-            ema = match ema {
-                Some(prev) => Some(alpha * 65.0 + (1.0 - alpha) * prev),
-                None => Some(65.0),
-            };
-            // hysteresis gate
-            let smoothed = ema.unwrap();
-            let mut eff = smoothed;
-            if (smoothed - last).abs() < HYSTERESIS_BUFFER {
-                eff = last;
-            } else {
-                last = smoothed;
-            }
-            assert!(eff <= TEMP_MAX);
+            effective = filter.update(65.0);
+            assert!(effective <= TEMP_MAX);
         }
-        // after enough iterations the EMA is very close to 65
-        assert!(ema.unwrap() > 64.0);
+        assert!(effective > 63.0, "got {effective}");
     }
 
-    // --- hysteresis -------------------------------------------------------
+    #[test]
+    fn filter_ignores_changes_below_the_buffer() {
+        let mut filter = TempFilter::new();
+        assert_eq!(filter.update(40.0), 40.0);
+        // smoothed value moves by only ~0.1°C, well inside the buffer
+        assert_eq!(filter.update(40.5), 40.0);
+    }
 
     #[test]
-    fn hysteresis_ignores_sub_buffer_changes() {
-        let buffer = HYSTERESIS_BUFFER;
-        let prev: f64 = 40.0;
-        let next: f64 = 40.5; // within buffer
-        assert!(
-            (next - prev).abs() < buffer,
-            "0.5 should be below {buffer}"
-        );
-        let prev2: f64 = 40.0;
-        let next2: f64 = 41.5; // above buffer
-        assert!((next2 - prev2).abs() >= buffer);
+    fn filter_applies_changes_above_the_buffer() {
+        let mut filter = TempFilter::new();
+        filter.update(40.0);
+        // first step: 0.2 * 50 + 0.8 * 40 = 42, which is >= 1°C away
+        let effective = filter.update(50.0);
+        assert!(effective > 41.0, "got {effective}");
     }
 }
