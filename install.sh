@@ -14,7 +14,7 @@
 #   1. Install the Rust toolchain (rustup) if it is missing.
 #   2. Build the release binary.
 #   3. Load the pwm_fan kernel module (enables /sys/class/thermal cooling_device*).
-#   4. Install a systemd service unit (auto-restart, safe shutdown).
+#   4. Install the systemd service unit (thermal-controller.service, auto-restart).
 #
 # Usage:
 #   sudo bash ./install.sh                       # from-source install
@@ -26,9 +26,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="/usr/local/bin"
 SERVICE_NAME="thermal-controller"
-SERVICE_DESC="Decoupled thermal controller for Radxa Cubie A7A"
 FROM_SOURCE=0
 DRY_RUN=0
 RELEASE_URL=""
@@ -149,21 +149,7 @@ fi
 section "systemd service"
 if command -v systemctl >/dev/null 2>&1 && [[ $DRY_RUN -eq 0 ]]; then
     UNIT="/etc/systemd/system/$SERVICE_NAME.service"
-    cat > "$UNIT" <<EOF
-[Unit]
-Description=$SERVICE_DESC
-After=multi-user.target
-
-[Service]
-Type=simple
-ExecStart=$INSTALL_DIR/$SERVICE_NAME
-Restart=on-failure
-RestartSec=5
-User=root
-
-[Install]
-WantedBy=multi-user.target
-EOF
+    cp "$SCRIPT_DIR/$SERVICE_NAME.service" "$UNIT"
     run systemctl daemon-reload
     run systemctl enable "$SERVICE_NAME"
     log "Enabled $SERVICE_NAME at boot."

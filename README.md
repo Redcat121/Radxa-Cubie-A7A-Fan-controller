@@ -49,28 +49,8 @@ sudo curl -sSL https://github.com/Redcat121/Radxa-Cubie-A7A-Fan-controller/relea
 sudo chmod +x /usr/local/bin/thermal-controller
 ```
 ```sh
-# 3. Create the service configuration file 
-sudo nano /etc/systemd/system/thermal-controller.service
-```
-```sh
-[Unit]
-Description=Radxa Cubie A7A Fan Control Service
-After=multi-user.target
-
-[Service]
-User=root
-
-
-ExecStartPre=/usr/bin/sleep 5
-ExecStart=/usr/local/bin/thermal-controller
-Restart=always
-RestartSec=5
-KillMode=process
-SendSIGKILL=no
-
-
-[Install]
-WantedBy=multi-user.target
+# 3. Download the service file
+sudo curl -sSL https://raw.githubusercontent.com/Redcat121/Radxa-Cubie-A7A-Fan-controller/HEAD/thermal-controller.service -o /etc/systemd/system/thermal-controller.service
 ```
 
 ```sh
@@ -92,6 +72,10 @@ sudo systemctl enable thermal-controller
 # check to see if it is running
 sudo systemctl status thermal-controller
 ```
+
+The service uses `Restart=always`. If the fan driver loads late, the controller
+exits with an error and systemd retries every 5 seconds until it finds a
+thermal zone and a fan.
 
 ## Install from source (not tested)
 
@@ -179,6 +163,7 @@ ARCHITECTURE.md    # how the code works
 CONTRIBUTING.md    # how to contribute
 LICENSE            # MIT license
 install.sh         # installer (one-liner or from source)
+thermal-controller.service  # systemd unit (used by the README and install.sh)
 src/
 ├── main.rs        # the controller
 └── tests.rs       # (removed; tests now live inline in main.rs)
