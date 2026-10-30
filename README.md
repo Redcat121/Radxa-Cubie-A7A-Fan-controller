@@ -73,9 +73,10 @@ sudo systemctl enable thermal-controller
 sudo systemctl status thermal-controller
 ```
 
-The service uses `Restart=always`. If the fan driver loads late, the controller
-exits with an error and systemd retries every 5 seconds until it finds a
-thermal zone and a fan.
+At startup the controller waits up to about a minute (12 scans, 5 seconds
+apart) for a thermal zone and a fan to appear, because the `pwm_fan` driver can
+load late. If none show up it exits with an error, and the service's
+`Restart=always` makes systemd try again after 5 seconds.
 
 ## Install from source (not tested)
 

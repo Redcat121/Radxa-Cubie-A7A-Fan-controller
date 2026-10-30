@@ -18,6 +18,8 @@
 //!     the hardware never overheats while the SoC is dead.
 //!   * **Fail-safe on blind sensors** – if no thermal zone can be read, the
 //!     fans run at maximum until readings return.
+//!   * **Patient startup** – the hardware scan is retried for a while, since
+//!     the `pwm_fan` driver can finish loading after the service starts.
 //!
 //! Build:
 //!   ```sh
@@ -59,6 +61,12 @@ const BANNER_UPDATE_MS: u64 = 500;
 /// Keywords that mark a thermal zone as a real SoC/CPU/GPU hot-spot.
 const ZONE_KEYWORDS: &[&str] = &["cpu", "gpu", "soc", "core", "tsadc"];
 
+/// How many times the startup scan is attempted before giving up.
+const DISCOVERY_ATTEMPTS: u32 = 12;
+
+/// Pause between startup scan attempts.
+const DISCOVERY_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+
 // ---------------------------------------------------------------------------
 // Data model
 // ---------------------------------------------------------------------------
@@ -76,17 +84,19 @@ struct CoolingDevice {
     max_state: i32,
 }
 
+/// Result of one hardware scan: `(zones, fans, warnings)`.
+type Discovery = (Vec<ThermalZone>, Vec<CoolingDevice>, Vec<String>);
+
 // ---------------------------------------------------------------------------
 // System discovery
 // ---------------------------------------------------------------------------
 
 /// Scan the sysfs thermal interface for CPU/GPU zones and PWM fan devices.
 ///
-/// Returns `(zones, fans, warnings)`. The scan never fails on a single bad
-/// device – unreadable files and non-fan cooling devices are skipped and
-/// reported as warnings so the controller still starts with whatever is
-/// discoverable.
-fn discover_system() -> Result<(Vec<ThermalZone>, Vec<CoolingDevice>, Vec<String>), String> {
+/// The scan never fails on a single bad device – unreadable files and non-fan
+/// cooling devices are skipped and reported as warnings so the controller
+/// still starts with whatever is discoverable.
+fn discover_system() -> Result<Discovery, String> {
     let root = "/sys/class/thermal";
     let entries = match fs::read_dir(root) {
         Ok(e) => e,
@@ -163,6 +173,27 @@ fn discover_system() -> Result<(Vec<ThermalZone>, Vec<CoolingDevice>, Vec<String
     }
 
     Ok((zones, fans, warnings))
+}
+
+/// Scan for zones and fans, retrying while the hardware is not ready.
+///
+/// `pwm_fan` can finish loading a few seconds after the service starts, so a
+/// scan that finds no zone or no fan is repeated every
+/// `DISCOVERY_RETRY_INTERVAL` for up to `DISCOVERY_ATTEMPTS` scans. Returns
+/// the last scan, which may still be incomplete; the caller decides what to do
+/// about that. Stops early if a shutdown signal arrives.
+fn discover_with_retry(shutdown: &AtomicBool) -> Result<Discovery, String> {
+    let mut attempt = 1;
+    loop {
+        let found = discover_system()?;
+        let ready = !found.0.is_empty() && !found.1.is_empty();
+        if ready || attempt >= DISCOVERY_ATTEMPTS || shutdown.load(Ordering::Relaxed) {
+            return Ok(found);
+        }
+        println!("⏳ Waiting for a thermal zone and a fan (scan {attempt}/{DISCOVERY_ATTEMPTS})...");
+        attempt += 1;
+        thread::sleep(DISCOVERY_RETRY_INTERVAL);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -269,7 +300,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     flag::register(SIGTERM, Arc::clone(&shutdown_signal))?;
 
     // --- Hardware scan ----------------------------------------------------
-    let (zones, fans, warnings) = discover_system()?;
+    let (zones, fans, warnings) = discover_with_retry(&shutdown_signal)?;
 
     println!("✅ System scan complete.");
     println!("📊 Thermal zones found: {}", zones.len());
@@ -283,11 +314,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if zones.is_empty() || fans.is_empty() {
+        // Asked to stop while still waiting for the hardware: nothing to max.
+        if shutdown_signal.load(Ordering::Relaxed) {
+            return Ok(());
+        }
         eprintln!("❌ Error: missing critical components (need ≥1 zone and ≥1 fan).");
         eprintln!("   Check your board exposes /sys/class/thermal and a PWM fan;");
         eprintln!("   you may need `modprobe pwm_fan` or a PWM fan driver loaded.");
         // Non-zero exit so systemd treats this as a failure and restarts the
-        // service (the fan driver may simply not be loaded yet).
+        // service.
         std::process::exit(1);
     }
 
