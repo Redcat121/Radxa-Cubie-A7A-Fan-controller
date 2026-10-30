@@ -330,26 +330,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // 2. Smooth the reading and apply hysteresis.
         let effective_temp = filter.update(global_max_temp);
 
-        // 3. Drive every fan.
+        // 3. Drive every fan, remembering what was applied for the banner.
+        let mut fan_status = Vec::with_capacity(fans.len());
         for fan in &fans {
             let target = compute_target(effective_temp, fan.max_state);
             match set_fan(fan, target) {
-                Ok(()) => {
-                    let now = now_ms();
-                    if now - last_status >= BANNER_UPDATE_MS {
-                        println!(
-                            "Status: [🔥 Hotspot: {} @ {:.1}°C (EMA: {:.1}°C)] \
-                             | Fan ({}) {} / {}        \r",
-                            hottest_zone_name, global_max_temp, effective_temp,
-                            fan.name, target, fan.max_state
-                        );
-                        last_status = now;
-                    }
-                }
-                Err(e) => {
-                    println!("❌ Failed to set {} to {}: {e}", fan.name, target);
-                }
+                Ok(()) => fan_status.push(format!("{} {} / {}", fan.name, target, fan.max_state)),
+                Err(e) => println!("❌ Failed to set {} to {}: {e}", fan.name, target),
             }
+        }
+
+        // 4. Status banner: one line per refresh, covering every fan.
+        let now = now_ms();
+        if now.saturating_sub(last_status) >= BANNER_UPDATE_MS {
+            println!(
+                "Status: [🔥 Hotspot: {} @ {:.1}°C | Applied: {:.1}°C] | Fans: {}",
+                hottest_zone_name,
+                global_max_temp,
+                effective_temp,
+                fan_status.join(", ")
+            );
+            last_status = now;
         }
 
         thread::sleep(POLL_INTERVAL);
