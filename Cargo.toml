@@ -1,6 +1,6 @@
 [package]
 name = "Radxa-Cubie-A7A-thermal-controller"
-version = "1.0.0"
+version = "1.1.1"
 edition = "2021"
 description = "Decoupled thermal controller for Radxa Cubie A7A - monitors thermal zones and drives PWM fans"
 license = "MIT"
@@ -20,5 +20,6 @@ strip = true
 
 [dependencies]
 signal-hook = "0.4"
-
+toml =" 0.8"
+serde = {version = "1", features = ["derive"]}
 [dev-dependencies]
