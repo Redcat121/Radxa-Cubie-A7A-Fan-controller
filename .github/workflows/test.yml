@@ -1,0 +1,32 @@
+# Runs the hardware-free unit tests and a release build on every push and
+# pull request to main and dev. This is separate from ci.yml, which only builds
+# and attaches the AArch64 binary when a GitHub Release is published.
+
+name: Test
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Unit tests
+        run: cargo test --locked
+
+      - name: Release build
+        run: cargo build --release --locked
+
+      - name: Installer syntax check
+        run: bash -n install.sh

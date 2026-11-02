@@ -128,16 +128,26 @@ sudo ./target/release/thermal-controller
 
 ## Configuration
 
-The controller's behavior is controlled by a few constants near the top of
-[`src/main.rs`](src/main.rs):
+The controller's behavior is controlled by a editable config file at `/etc/thermal-controller/config.toml`. if does not exist it will be automictically 
+created with the default values on the first run. See
+[`config.example.toml`](config.example.toml) for a commented example.:
+
+Changes are read at startup, so restart the service after editing:
+
+```sh
+sudo systemctl restart thermal-controller
+```
+
 
 | Setting | Default | What it means |
 |---------|---------|---------------|
-| `TEMP_MIN` | 35.0°C | Fan starts ramping up above this |
-| `TEMP_MAX` | 65.0°C | Fan goes to full speed above this |
-| `EMA_ALPHA` | 0.2 | Smoothing factor — lower is smoother but slower to react |
-| `HYSTERESIS_BUFFER` | 1.0°C | Smallest temp change that triggers a fan change |
-| `POLL_INTERVAL` | 2s | How often the sensors are re-read |
+| `temp_min` | 35.0°C | Fan starts ramping up above this |
+| `temp_max` | 65.0°C | Fan goes to full speed above this |
+| `ema_alpha` | 0.2 | Smoothing factor — lower is smoother but slower to react |
+| `hysteresis_buffer` | 1.0°C | Smallest temp change that triggers a fan change |
+| `poll_interval_secs` | 2s | How often the sensors are re-read |
+| `banner_update_ms` | 500 | How often the status line is refreshed, in milliseconds |
+| `zone_keywords` | `["cpu", "gpu", "soc", "core", "tsadc"]` | Thermal zones whose name contains one of these words count as hot-spots |
 
 ## Testing
 
@@ -167,7 +177,7 @@ install.sh         # installer (one-liner or from source)
 thermal-controller.service  # systemd unit (used by the README and install.sh)
 src/
 ├── main.rs        # the controller
-└── tests.rs       # (removed; tests now live inline in main.rs)
+└── config.rs       # config handller script
 .gitignore
 ```
 

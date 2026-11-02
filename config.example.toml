@@ -1,0 +1,28 @@
+# thermal controller configuration.
+# Copy this file to /etc/thermal-controller/config.toml and edit as needed.
+# The service reads this file at startup, so restart it after making changes:
+#   sudo systemctl restart thermal-controller
+
+# Temperature (°C) at which the fan starts ramping up from off.
+temp_min = 35.0
+
+# Temperature (°C) at which the fan reaches full speed.
+# Must be greater than temp_min.
+temp_max = 65.0
+
+# EMA smoothing factor, between 0 (exclusive) and 1.
+# Lower values smooth the readings more but react more slowly.
+ema_alpha = 0.2
+
+# Minimum change (°C) in the smoothed temperature before the fan target updates.
+# Prevents rapid fan speed changes when the temperature hovers near a step.
+hysteresis_buffer = 1.0
+
+# How often, in seconds, the sensors are read. Must be at least 1.
+poll_interval_secs = 2
+
+# How often, in milliseconds, the status line is refreshed on the console.
+banner_update_ms = 500
+
+# Thermal zones whose type name contains one of these words are treated as hot-spots.
+zone_keywords = ["cpu", "gpu", "soc", "core", "tsadc"]

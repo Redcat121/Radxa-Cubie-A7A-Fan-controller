@@ -26,9 +26,12 @@
 //!   cargo build --release
 //!   sudo ./target/release/thermal-controller
 //!   ```
-
+mod config;
+use config::Config;
+use std::path::Path;
 use std::fs;
 use std::panic;
+use std::println;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -38,34 +41,12 @@ use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::flag;
 
 // ---------------------------------------------------------------------------
-// Configuration constants
+// Configuration config
 // ---------------------------------------------------------------------------
 
-/// Lowest fan speed applied by the controller (°C).
-const TEMP_MIN: f64 = 35.0;
-/// Highest fan speed applied by the controller (°C).
-const TEMP_MAX: f64 = 65.0;
-
-/// EMA smoothing factor. Lower → smoother (slower to react), higher → snappier.
-const EMA_ALPHA: f64 = 0.2;
-
-/// Hysteresis buffer (°C) around the applied temperature to avoid fan chatter.
-const HYSTERESIS_BUFFER: f64 = 1.0;
-
-/// How often (polling period) we re-evaluate the board temperature.
-const POLL_INTERVAL: Duration = Duration::from_secs(2);
-
-/// How often (ms) the live status banner is refreshed.
-const BANNER_UPDATE_MS: u64 = 500;
-
-/// Keywords that mark a thermal zone as a real SoC/CPU/GPU hot-spot.
-const ZONE_KEYWORDS: &[&str] = &["cpu", "gpu", "soc", "core", "tsadc"];
-
-/// How many times the startup scan is attempted before giving up.
-const DISCOVERY_ATTEMPTS: u32 = 12;
-
-/// Pause between startup scan attempts.
-const DISCOVERY_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+const CONFIG_PATH: &str = "/etc/thermal-controller/config.toml";
+const DISCOVERY_RETRY_INTERVAL: Duration = Duration::from_secs(1);
+const DISCOVERY_ATTEMPTS: u32 = 10;
 
 // ---------------------------------------------------------------------------
 // Data model
@@ -96,7 +77,7 @@ type Discovery = (Vec<ThermalZone>, Vec<CoolingDevice>, Vec<String>);
 /// The scan never fails on a single bad device – unreadable files and non-fan
 /// cooling devices are skipped and reported as warnings so the controller
 /// still starts with whatever is discoverable.
-fn discover_system() -> Result<Discovery, String> {
+fn discover_system(config: &Config) -> Result<(Vec<ThermalZone>, Vec<CoolingDevice>, Vec<String>), String> {
     let root = "/sys/class/thermal";
     let entries = match fs::read_dir(root) {
         Ok(e) => e,
@@ -129,7 +110,7 @@ fn discover_system() -> Result<Discovery, String> {
         };
 
         if name.starts_with("thermal_zone") {
-            let is_hotspot = ZONE_KEYWORDS.iter().any(|kw| kind.contains(kw));
+            let is_hotspot = config.zone_keywords.iter().any(|kw| kind.contains(kw));
             if !is_hotspot {
                 continue;
             }
@@ -182,10 +163,10 @@ fn discover_system() -> Result<Discovery, String> {
 /// `DISCOVERY_RETRY_INTERVAL` for up to `DISCOVERY_ATTEMPTS` scans. Returns
 /// the last scan, which may still be incomplete; the caller decides what to do
 /// about that. Stops early if a shutdown signal arrives.
-fn discover_with_retry(shutdown: &AtomicBool) -> Result<Discovery, String> {
+fn discover_with_retry(shutdown: &AtomicBool, config: &Config) -> Result<Discovery, String> {
     let mut attempt = 1;
     loop {
-        let found = discover_system()?;
+        let found = discover_system(config)?;
         let ready = !found.0.is_empty() && !found.1.is_empty();
         if ready || attempt >= DISCOVERY_ATTEMPTS || shutdown.load(Ordering::Relaxed) {
             return Ok(found);
@@ -224,25 +205,29 @@ fn read_hottest(zones: &[ThermalZone]) -> Option<(f64, String)> {
 struct TempFilter {
     ema: Option<f64>,
     applied: f64,
+    ema_alpha: f64,
+    hysteresis_buffer: f64,
 }
 
 impl TempFilter {
-    fn new() -> Self {
+    fn new(config: &Config) -> Self {
         Self {
             ema: None,
-            applied: TEMP_MIN,
+            applied: config.temp_min,
+            ema_alpha: config.ema_alpha,
+            hysteresis_buffer: config.hysteresis_buffer,
         }
     }
 
     /// Feed one raw reading (°C) and return the effective temperature.
     fn update(&mut self, raw: f64) -> f64 {
         let smoothed = match self.ema {
-            Some(prev) => EMA_ALPHA * raw + (1.0 - EMA_ALPHA) * prev,
+            Some(prev) => self.ema_alpha * raw + (1.0 - self.ema_alpha) * prev,
             None => raw,
         };
         self.ema = Some(smoothed);
 
-        if (smoothed - self.applied).abs() < HYSTERESIS_BUFFER {
+        if (smoothed - self.applied).abs() < self.hysteresis_buffer {
             self.applied
         } else {
             self.applied = smoothed;
@@ -253,21 +238,21 @@ impl TempFilter {
 
 /// Compute the fan target step (0..=max_state) for a temperature.
 ///
-/// * `>= TEMP_MAX` → full speed
+/// * `>= temp_max` → full speed
 /// * `<= TEMP_MIN` → off
 /// * in between    → linear mapping, rounded *up* (never under-cool)
-fn compute_target(temp_c: f64, max_state: i32) -> i32 {
+fn compute_target(config: &Config, temp_c: f64, max_state: i32) -> i32 {
     if max_state <= 0 {
         return 0;
     }
-    if temp_c >= TEMP_MAX {
+    if temp_c >= config.temp_max {
         return max_state;
     }
-    if temp_c <= TEMP_MIN {
+    if temp_c <= config.temp_min {
         return 0;
     }
-    let step = (TEMP_MAX - TEMP_MIN) / max_state as f64;
-    let raw = (temp_c - TEMP_MIN) / step;
+    let step = (config.temp_max - config.temp_min) / max_state as f64;
+        let raw = (temp_c - config.temp_min) / step;
     raw.ceil() as i32
 }
 
@@ -293,14 +278,25 @@ fn now_ms() -> u64 {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 Initializing Decoupled Thermal Controller (EMA Smoothing Edition)...");
+    let path = Path::new(CONFIG_PATH);
+    if !path.exists() {
+        if let Err(e) = config::create_default(path) {
+            eprintln!("⚠️  Could not create {CONFIG_PATH}: {e}");
+        }
+    }
 
+    let config = config::load(path).unwrap_or_else(|e| {
+        eprintln!("⚠️  Config error ({e}); using built-in defaults.");
+        Config::default()
+    });
+    let poll_interval = Duration::from_secs(config.poll_interval);
     // --- Signal traps -----------------------------------------------------
     let shutdown_signal = Arc::new(AtomicBool::new(false));
     flag::register(SIGINT, Arc::clone(&shutdown_signal))?;
     flag::register(SIGTERM, Arc::clone(&shutdown_signal))?;
 
     // --- Hardware scan ----------------------------------------------------
-    let (zones, fans, warnings) = discover_with_retry(&shutdown_signal)?;
+    let (zones, fans, warnings) = discover_with_retry(&shutdown_signal, &config)?;
 
     println!("✅ System scan complete.");
     println!("📊 Thermal zones found: {}", zones.len());
@@ -336,7 +332,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }));
 
     // --- Main monitoring loop --------------------------------------------
-    let mut filter = TempFilter::new();
+    let mut filter = TempFilter::new(&config);
     let mut last_status = 0u64;
     let mut sensors_lost = false;
 
@@ -354,7 +350,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("❌ Failed to set {} to {}: {e}", fan.name, fan.max_state);
                 }
             }
-            thread::sleep(POLL_INTERVAL);
+            thread::sleep(poll_interval);
             continue;
         };
         if sensors_lost {
@@ -368,7 +364,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // 3. Drive every fan, remembering what was applied for the banner.
         let mut fan_status = Vec::with_capacity(fans.len());
         for fan in &fans {
-            let target = compute_target(effective_temp, fan.max_state);
+            let target = compute_target(&config, effective_temp, fan.max_state);
             match set_fan(fan, target) {
                 Ok(()) => fan_status.push(format!("{} {} / {}", fan.name, target, fan.max_state)),
                 Err(e) => println!("❌ Failed to set {} to {}: {e}", fan.name, target),
@@ -377,7 +373,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // 4. Status banner: one line per refresh, covering every fan.
         let now = now_ms();
-        if now.saturating_sub(last_status) >= BANNER_UPDATE_MS {
+        if now.saturating_sub(last_status) >= config.banner_update_ms {
             println!(
                 "Status: [🔥 Hotspot: {} @ {:.1}°C | Applied: {:.1}°C] | Fans: {}",
                 hottest_zone_name,
@@ -388,7 +384,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             last_status = now;
         }
 
-        thread::sleep(POLL_INTERVAL);
+        thread::sleep(poll_interval);
     }
 
     // --- Graceful shutdown: max fans -------------------------------------
@@ -426,35 +422,40 @@ mod tests {
 
     #[test]
     fn target_is_zero_below_min() {
-        assert_eq!(compute_target(34.0, 12), 0);
-        assert_eq!(compute_target(10.0, 12), 0);
+        let cfg = Config::default();
+        assert_eq!(compute_target(&cfg, 34.0,12), 0);
     }
 
     #[test]
     fn target_is_max_at_or_above_max() {
-        assert_eq!(compute_target(65.0, 12), 12);
-        assert_eq!(compute_target(70.0, 12), 12);
-        assert_eq!(compute_target(100.0, 12), 12);
+        let cfg = Config::default();
+        assert_eq!(compute_target(&cfg, 65.0, 12), 12);
+        assert_eq!(compute_target(&cfg, 70.0, 12), 12);
+        assert_eq!(compute_target(&cfg, 100.0, 12), 12);
     }
 
     #[test]
     fn target_roughly_midpoint() {
         // midpoint of 35..65 is 50°C → about mid-range of a 12-step fan
-        let t = compute_target(50.0, 12);
+        let cfg = Config::default();
+        let t = compute_target(&cfg, 50.0, 12);
         assert!((4..=8).contains(&t), "got {t}");
     }
 
     #[test]
     fn target_rounds_up_never_undercools() {
         // 38°C → ceil(1.2) = 2 ; 42°C → ceil(2.4) = 3 (strictly higher step)
-        assert!(compute_target(42.0, 12) > compute_target(38.0, 12));
+        let cfg = Config::default();
+        assert!(compute_target(&cfg, 42.0, 12) > compute_target(&cfg, 38.0, 12));
         // and the highest in-range value never exceeds max
-        assert!(compute_target(64.9, 12) <= 12);
+        assert!(compute_target(&cfg, 64.9, 12) <= 12);
     }
 
     #[test]
     fn target_zero_for_nonpositive_max_state() {
-        assert_eq!(compute_target(50.0, 0), 0);
+        let cfg = Config::default();
+
+        assert_eq!(compute_target(&cfg,50.0, 0), 0);
     }
 
     // --- set_fan ----------------------------------------------------------
@@ -525,19 +526,21 @@ mod tests {
 
     #[test]
     fn filter_converges_toward_a_sustained_reading() {
-        let mut filter = TempFilter::new();
+        let cfg = Config::default();
+        let mut filter = TempFilter::new(&cfg);
         filter.update(35.0); // seed at the floor
         let mut effective = 0.0;
         for _ in 0..50 {
             effective = filter.update(65.0);
-            assert!(effective <= TEMP_MAX);
+            assert!(effective <= cfg.temp_max);
         }
         assert!(effective > 63.0, "got {effective}");
     }
 
     #[test]
     fn filter_ignores_changes_below_the_buffer() {
-        let mut filter = TempFilter::new();
+        let cfg = Config::default();
+        let mut filter = TempFilter::new(&cfg);
         assert_eq!(filter.update(40.0), 40.0);
         // smoothed value moves by only ~0.1°C, well inside the buffer
         assert_eq!(filter.update(40.5), 40.0);
@@ -545,10 +548,17 @@ mod tests {
 
     #[test]
     fn filter_applies_changes_above_the_buffer() {
-        let mut filter = TempFilter::new();
+        let cfg = Config::default();
+        let mut filter = TempFilter::new(&cfg);
         filter.update(40.0);
         // first step: 0.2 * 50 + 0.8 * 40 = 42, which is >= 1°C away
         let effective = filter.update(50.0);
         assert!(effective > 41.0, "got {effective}");
     }
+    #[test]
+    fn default_config_round_trips() {
+        let text = toml::to_string_pretty(&Config::default()).unwrap();
+        let parsed: Config = toml::from_str(&text).unwrap();
+        assert_eq!(parsed.temp_max, Config::default().temp_max);
+}
 }
