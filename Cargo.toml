@@ -1,5 +1,5 @@
 [package]
-name = "Radxa-Cubie-A7A-thermal-controller"
+name = "thermal-controller"
 version = "1.1.1"
 edition = "2021"
 description = "Decoupled thermal controller for Radxa Cubie A7A - monitors thermal zones and drives PWM fans"
@@ -7,7 +7,7 @@ license = "MIT"
 readme = "README.md"
 
 [[bin]]
-name = "Radxa-Cubie-A7A-thermal-controller"
+name = "thermal-controller"
 path = "src/main.rs"
 
 # Profile for low-latency embedded use
