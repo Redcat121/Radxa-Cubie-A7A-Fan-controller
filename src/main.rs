@@ -173,7 +173,7 @@ fn discover_with_retry(shutdown: &AtomicBool, config: &Config) -> Result<Discove
         }
         println!("⏳ Waiting for a thermal zone and a fan (scan {attempt}/{DISCOVERY_ATTEMPTS})...");
         attempt += 1;
-        thread::sleep(DISCOVERY_RETRY_INTERVAL);
+        sleep_unless_shutdown(DISCOVERY_RETRY_INTERVAL, shutdown);
     }
 }
 
@@ -263,7 +263,12 @@ fn set_fan(fan: &CoolingDevice, target: i32) -> Result<(), String> {
     fs::write(&fan.path, target.to_string())
         .map_err(|e| format!("cannot write {}: {e}", fan.path))
 }
-
+/// Drive every fan to its maximum step. Returns one message per failed write.
+fn max_all_fans(fans: &[CoolingDevice]) -> Vec<String> {
+    fans.iter()
+        .filter_map(|fan| set_fan(fan, fan.max_state).err())
+        .collect()
+}
 /// Milliseconds since the Unix epoch, or 0 if the clock is unavailable.
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -271,7 +276,15 @@ fn now_ms() -> u64 {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
-
+fn sleep_unless_shutdown(total: Duration, shutdown: &AtomicBool) {
+    const SLICE: Duration = Duration::from_millis(100);
+    let mut remaining = total;
+    while !remaining.is_zero() && !shutdown.load(Ordering::Relaxed) {
+        let step = remaining.min(SLICE);
+        thread::sleep(step);
+        remaining -= step;
+    }
+}
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -317,6 +330,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if zones.is_empty() || fans.is_empty() {
         // Asked to stop while still waiting for the hardware: nothing to max.
+        // Without sensors we cannot regulate, so do not leave a fan idle.
+        for e in max_all_fans(&fans) {
+            eprintln!("❌ {e}");
+        }        
+        // Asked to stop while still waiting for the hardware.
         if shutdown_signal.load(Ordering::Relaxed) {
             return Ok(());
         }
@@ -351,12 +369,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("⚠️  No thermal zone is readable; forcing fans to maximum until readings return.");
                 sensors_lost = true;
             }
-            for fan in &fans {
-                if let Err(e) = set_fan(fan, fan.max_state) {
-                    println!("❌ Failed to set {} to {}: {e}", fan.name, fan.max_state);
-                }
+            for e in max_all_fans(&fans) {
+                println!("❌ {e}");
             }
-            thread::sleep(poll_interval_secs);
+            sleep_unless_shutdown(poll_interval_secs, &shutdown_signal);
             continue;
         };
         if sensors_lost {
@@ -390,27 +406,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             last_status = now;
         }
 
-        thread::sleep(poll_interval_secs);
+        sleep_unless_shutdown(poll_interval_secs, &shutdown_signal);
     }
 
     // --- Graceful shutdown: max fans -------------------------------------
     println!("\n🛑 Shutdown detected. Forcing all fans to maximum before exit...");
-    let mut failed_fans = 0;
-    for fan in &fans {
-        match set_fan(fan, fan.max_state) {
-            Ok(()) => println!("✅ {} → {} (max)", fan.name, fan.max_state),
-            Err(e) => {
-                failed_fans += 1;
-                println!("❌ {} final state failed: {e}", fan.name);
-            }
-        }
+    let errors = max_all_fans(&fans);
+    for e in &errors {
+        println!("❌ {e}");
     }
-
-    if failed_fans == 0 {
+    if errors.is_empty() {
+        println!("✅ All fans set to maximum.");
         println!("👋 Thermal controller terminated safely.");
     } else {
         eprintln!(
-            "⚠️  Thermal controller terminated, but {failed_fans} fan(s) could not be set to maximum."
+            "⚠️  Thermal controller terminated, but {} fan(s) could not be set to maximum.",
+            errors.len()
         );
     }
     Ok(())
@@ -567,4 +578,33 @@ mod tests {
         let parsed: Config = toml::from_str(&text).unwrap();
         assert_eq!(parsed.temp_max, Config::default().temp_max);
 }
+
+    #[test]
+    fn sleep_returns_early_on_shutdown() {
+        let flag = AtomicBool::new(true);
+        let start = std::time::Instant::now();
+        sleep_unless_shutdown(Duration::from_secs(30), &flag);
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn max_all_fans_reports_each_failure() {
+        let ok_path = std::env::temp_dir().join(format!("tc-test-{}-maxfan", std::process::id()));
+        let fans = [
+            CoolingDevice {
+                name: "ok".into(),
+                path: ok_path.to_string_lossy().into_owned(),
+                max_state: 4,
+            },
+            CoolingDevice {
+                name: "bad".into(),
+                path: "/nonexistent-dir/cur_state".into(),
+                max_state: 4,
+            },
+        ];
+        let errors = max_all_fans(&fans);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(fs::read_to_string(&ok_path).unwrap(), "4");
+    }
+
 }
