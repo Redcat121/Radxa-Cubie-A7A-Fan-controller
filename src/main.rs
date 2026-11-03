@@ -295,7 +295,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Config::default()
         }
     };
-    let poll_interval = Duration::from_secs(config.poll_interval);
+    let poll_interval_secs = Duration::from_secs(config.poll_interval_secs);
     // --- Signal traps -----------------------------------------------------
     let shutdown_signal = Arc::new(AtomicBool::new(false));
     flag::register(SIGINT, Arc::clone(&shutdown_signal))?;
@@ -356,7 +356,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("❌ Failed to set {} to {}: {e}", fan.name, fan.max_state);
                 }
             }
-            thread::sleep(poll_interval);
+            thread::sleep(poll_interval_secs);
             continue;
         };
         if sensors_lost {
@@ -390,7 +390,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             last_status = now;
         }
 
-        thread::sleep(poll_interval);
+        thread::sleep(poll_interval_secs);
     }
 
     // --- Graceful shutdown: max fans -------------------------------------

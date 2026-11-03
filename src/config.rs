@@ -3,16 +3,15 @@ use std::{fs, path::Path};
 
 const DEFAULT_CONFIG: &str = include_str!("../config.example.toml");
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, rename_all = "SCREAMING_SNAKE_CASE")]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
-   pub temp_min: f64,
-   pub temp_max: f64,
-   pub ema_alpha: f64,
-   pub hysteresis_buffer: f64,
-   pub poll_interval: u64,
-   pub banner_update_ms: u64,
-   pub zone_keywords: Vec<String>
-
+    pub temp_min: f64,
+    pub temp_max: f64,
+    pub ema_alpha: f64,
+    pub hysteresis_buffer: f64,
+    pub poll_interval_secs: u64,          
+    pub banner_update_ms: u64,
+    pub zone_keywords: Vec<String>,
 }
 // Default values for the configuration parameters
 impl Default for Config {
@@ -22,7 +21,7 @@ impl Default for Config {
             temp_max: 65.0,
             ema_alpha: 0.2,
             hysteresis_buffer: 1.0,
-            poll_interval: 2,
+            poll_interval_secs: 2,
             banner_update_ms: 500,
             zone_keywords: vec![
                 "cpu".into(),
@@ -46,8 +45,8 @@ impl Config {
         if self.hysteresis_buffer < 0.0 {
             return Err("HYSTERESIS_BUFFER must be non-negative".into());
         }
-        if self.poll_interval == 0 {
-            return Err("POLL_INTERVAL must be greater than 0".into());
+        if self.poll_interval_secs == 0 {
+            return Err("POLL_INTERVAL_SECS must be greater than 0".into());
         }
         if self.banner_update_ms == 0 {
             return Err("BANNER_UPDATE_MS must be greater than 0".into());
