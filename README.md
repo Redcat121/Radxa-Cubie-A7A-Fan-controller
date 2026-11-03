@@ -3,13 +3,13 @@
 Keep your **Radxa Cubie A7A** cool automatically.
 
 This small program watches your board's temperature sensors and drives the PWM
-fan so the hottest spot stays in a comfortable window — no more manually
-adjusting fan speed when the SoC gets hot under load.
+fan so the hottest spot stays in a comfortable window.
 
 ## What it does
 
 - **Finds your hottest spot.** It reads every temperature sensor on the board
-  (CPU, SoC, GPU) and tracks the hottest one.
+  (CPU, SoC, GPU) and tracks the hottest one. If it fails to find one it will
+  attempt 10 times before stop/restarting.
 - **Smooths it out.** Raw sensor readings are noisy, so the fan adjusts
   gradually instead of jittering on and off.
 - **Keeps you quiet when you can.** At low temperatures the fan stays calm.
