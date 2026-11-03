@@ -30,7 +30,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="/usr/local/bin"
 SERVICE_NAME="thermal-controller"               # installed binary and systemd unit name
-BIN_NAME="Radxa-Cubie-A7A-thermal-controller"   # cargo binary and release asset name
+BIN_NAME="thermal-controller"                   # cargo binary and release asset name
 RELEASE_URL="https://github.com/Redcat121/Radxa-Cubie-A7A-Fan-controller/releases/latest/download/$BIN_NAME"
 PREBUILT=0
 DRY_RUN=0

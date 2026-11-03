@@ -285,10 +285,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let config = config::load(path).unwrap_or_else(|e| {
-        eprintln!("⚠️  Config error ({e}); using built-in defaults.");
-        Config::default()
-    });
+    let config = match config::load(path) {
+        Ok(c) => {
+            println!("✅ Loaded config from {CONFIG_PATH}: {c:?}");
+            c
+        }
+        Err(e) => {
+            eprintln!("⚠️  Config error ({e}); using built-in defaults.");
+            Config::default()
+        }
+    };
     let poll_interval = Duration::from_secs(config.poll_interval);
     // --- Signal traps -----------------------------------------------------
     let shutdown_signal = Arc::new(AtomicBool::new(false));
